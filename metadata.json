@@ -1,0 +1,5 @@
+{
+  "name": "Philippine Telco News Aggregator",
+  "description": "An application that uses Gemini with Google Search grounding to find and summarize the latest telecommunications news from the Philippines based on specific companies and date ranges.",
+  "requestFramePermissions": []
+}
