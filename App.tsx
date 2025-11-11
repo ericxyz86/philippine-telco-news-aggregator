@@ -1,12 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import { NewsArticle, CompanyNewsSection, Presentation, NewsData, BuzzSumoArticle } from './types';
-import { fetchTelcoNews, generatePresentationFromNews, mergeNewsWithBuzzSumo, fixBrokenLinksWithBuzzSumo } from './services/geminiService';
-import { fetchPhilippineTelcoNews } from './services/buzzsumoService';
+import { generatePresentationFromNews, mergeNewsWithBuzzSumo } from './services/geminiService';
 import Header from './components/Header';
 import NewsCard from './components/NewsCard';
 import LoadingSpinner from './components/LoadingSpinner';
 import PresentationViewer from './components/PresentationViewer';
 import BuzzSumoSection from './components/BuzzSumoSection';
+
+// Get backend API URL from environment or default to localhost
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:10000';
 
 
 const getFormattedDate = (date: Date): string => {
@@ -40,37 +42,21 @@ const App: React.FC = () => {
     setHasFetched(true);
 
     try {
-      // Fetch from both sources in parallel
-      const [geminiResult, buzzsumoResult] = await Promise.allSettled([
-        fetchTelcoNews(startDate, endDate),
-        fetchPhilippineTelcoNews(startDate, endDate),
-      ]);
+      // Call backend API to fetch news from both sources
+      const response = await fetch(`${API_URL}/api/news?startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`);
 
-      // Handle Gemini results
-      let geminiData: NewsData | null = null;
-      if (geminiResult.status === 'fulfilled') {
-        geminiData = geminiResult.value.data;
-      } else {
-        console.error('Gemini API error:', geminiResult.reason);
-        throw geminiResult.reason;
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `Failed to fetch news: ${response.status}`);
       }
 
-      // Handle BuzzSumo results (graceful degradation)
-      let buzzsumoData: BuzzSumoArticle[] = [];
-      if (buzzsumoResult.status === 'fulfilled') {
-        buzzsumoData = buzzsumoResult.value;
-        setBuzzsumoArticles(buzzsumoData);
-      } else {
-        console.warn('BuzzSumo API error (non-critical):', buzzsumoResult.reason);
-        // Don't throw error for BuzzSumo failures - it's supplementary
-      }
+      const data = await response.json();
 
-      // Fix any broken grounding redirect links using BuzzSumo metadata
-      if (geminiData && buzzsumoData.length > 0) {
-        console.log('Attempting to fix broken grounding links with BuzzSumo metadata...');
-        geminiData = fixBrokenLinksWithBuzzSumo(geminiData, buzzsumoData);
-      }
+      // Extract news data and BuzzSumo articles from backend response
+      const geminiData: NewsData = data.geminiNews;
+      const buzzsumoData: BuzzSumoArticle[] = data.buzzsumoArticles || [];
 
+      setBuzzsumoArticles(buzzsumoData);
       setNewsData(geminiData);
     } catch (err) {
       console.error(err);
