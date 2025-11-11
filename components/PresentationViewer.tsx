@@ -12,6 +12,27 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
   const [isDownloading, setIsDownloading] = useState(false);
   const slides = presentation.slides;
 
+  // Helper function to strip markdown formatting and convert to pptxgen text objects
+  const parseMarkdownText = (text: string): Array<{ text: string; options?: { bold?: boolean } }> => {
+    const parts: Array<{ text: string; options?: { bold?: boolean } }> = [];
+    const regex = /(\*\*.*?\*\*|[^*]+)/g;
+    const matches = text.match(regex);
+
+    if (!matches) return [{ text }];
+
+    matches.forEach(match => {
+      if (match.startsWith('**') && match.endsWith('**')) {
+        // Bold text - remove asterisks and mark as bold
+        parts.push({ text: match.slice(2, -2), options: { bold: true } });
+      } else {
+        // Regular text
+        parts.push({ text: match });
+      }
+    });
+
+    return parts;
+  };
+
   // Helper function to convert image URL to base64
   const urlToBase64 = async (url: string): Promise<string | null> => {
     // Method 1: Try direct fetch (works for most images)
@@ -195,19 +216,6 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
                 fontFace: 'Roboto',
               });
             }
-
-            // Add PLDT branding
-            pptxSlide.addText('PLDT Home', {
-              x: 8.5,
-              y: 5,
-              w: 1,
-              h: 0.3,
-              fontSize: 14,
-              bold: true,
-              color: 'DC2626',
-              opacity: 0.5,
-              fontFace: 'Roboto',
-            });
             break;
 
           case 'significance':
@@ -224,14 +232,16 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
             });
 
             slide.points.forEach((point, index) => {
-              pptxSlide.addText(`• ${point}`, {
+              // Parse markdown and create text with proper bold formatting
+              const parsedText = parseMarkdownText(point);
+              pptxSlide.addText(parsedText, {
                 x: 1,
                 y: 1.5 + (index * 0.7),
                 w: 8,
                 h: 0.6,
                 fontSize: 16,
                 color: '475569',
-                bullet: true,
+                bullet: { type: 'bullet', characterCode: '2022' },
                 fontFace: 'Roboto',
               });
             });

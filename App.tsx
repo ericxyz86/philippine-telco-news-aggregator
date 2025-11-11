@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { NewsArticle, CompanyNewsSection, Presentation, NewsData, BuzzSumoArticle } from './types';
-import { fetchTelcoNews, generatePresentationFromNews, mergeNewsWithBuzzSumo } from './services/geminiService';
+import { fetchTelcoNews, generatePresentationFromNews, mergeNewsWithBuzzSumo, fixBrokenLinksWithBuzzSumo } from './services/geminiService';
 import { fetchPhilippineTelcoNews } from './services/buzzsumoService';
 import Header from './components/Header';
 import NewsCard from './components/NewsCard';
@@ -47,20 +47,31 @@ const App: React.FC = () => {
       ]);
 
       // Handle Gemini results
+      let geminiData: NewsData | null = null;
       if (geminiResult.status === 'fulfilled') {
-        setNewsData(geminiResult.value.data);
+        geminiData = geminiResult.value.data;
       } else {
         console.error('Gemini API error:', geminiResult.reason);
         throw geminiResult.reason;
       }
 
       // Handle BuzzSumo results (graceful degradation)
+      let buzzsumoData: BuzzSumoArticle[] = [];
       if (buzzsumoResult.status === 'fulfilled') {
-        setBuzzsumoArticles(buzzsumoResult.value);
+        buzzsumoData = buzzsumoResult.value;
+        setBuzzsumoArticles(buzzsumoData);
       } else {
         console.warn('BuzzSumo API error (non-critical):', buzzsumoResult.reason);
         // Don't throw error for BuzzSumo failures - it's supplementary
       }
+
+      // Fix any broken grounding redirect links using BuzzSumo metadata
+      if (geminiData && buzzsumoData.length > 0) {
+        console.log('Attempting to fix broken grounding links with BuzzSumo metadata...');
+        geminiData = fixBrokenLinksWithBuzzSumo(geminiData, buzzsumoData);
+      }
+
+      setNewsData(geminiData);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : 'An unknown error occurred. Please check the console for details.');

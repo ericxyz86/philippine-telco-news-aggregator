@@ -81,6 +81,67 @@ const areDuplicateArticles = (article1: NewsArticle, article2: NewsArticle): boo
 };
 
 /**
+ * Fixes broken grounding redirect URLs by matching against BuzzSumo articles by title
+ */
+export const fixBrokenLinksWithBuzzSumo = (newsData: NewsData, buzzsumoArticles: BuzzSumoArticle[]): NewsData => {
+    if (!buzzsumoArticles || buzzsumoArticles.length === 0) {
+        console.log('No BuzzSumo articles available for link fixing');
+        return newsData;
+    }
+
+    const companyArticles = newsData.companyNews.flatMap(section => section.articles);
+    const allNews = [...newsData.internationalNews, ...newsData.generalNews, ...companyArticles];
+
+    let fixedCount = 0;
+
+    for (const article of allNews) {
+        // Check if the URI is a problematic grounding redirect
+        if (article.source.uri.includes('vertexaisearch') || article.source.uri.includes('grounding-api-redirect')) {
+            console.log(`🔍 Attempting to fix broken link for: "${article.title}"`);
+            console.log(`   Current broken URI: ${article.source.uri}`);
+
+            // Try to find matching BuzzSumo article by title similarity
+            const normalizedArticleTitle = normalizeTitle(article.title);
+
+            const matchedBuzzSumo = buzzsumoArticles.find(buzzArticle => {
+                const normalizedBuzzTitle = normalizeTitle(buzzArticle.title);
+
+                // Check exact match
+                if (normalizedArticleTitle === normalizedBuzzTitle) {
+                    return true;
+                }
+
+                // Check if one title contains most of the other (>70% overlap)
+                const longerTitle = normalizedArticleTitle.length > normalizedBuzzTitle.length ? normalizedArticleTitle : normalizedBuzzTitle;
+                const shorterTitle = normalizedArticleTitle.length > normalizedBuzzTitle.length ? normalizedBuzzTitle : normalizedArticleTitle;
+
+                if (shorterTitle.length > 10 && longerTitle.includes(shorterTitle)) {
+                    return true;
+                }
+
+                return false;
+            });
+
+            if (matchedBuzzSumo) {
+                console.log(`   ✅ Fixed with BuzzSumo URL: ${matchedBuzzSumo.url}`);
+                console.log(`   Matched BuzzSumo title: "${matchedBuzzSumo.title}"`);
+                article.source.uri = matchedBuzzSumo.url;
+                article.source.title = matchedBuzzSumo.domain_name;
+                fixedCount++;
+            } else {
+                console.warn(`   ❌ No matching BuzzSumo article found for: "${article.title}"`);
+            }
+        }
+    }
+
+    if (fixedCount > 0) {
+        console.log(`✅ Fixed ${fixedCount} broken grounding links using BuzzSumo metadata`);
+    }
+
+    return newsData;
+};
+
+/**
  * Merges BuzzSumo articles into NewsData with deduplication
  */
 export const mergeNewsWithBuzzSumo = (googleNews: NewsData, buzzsumoArticles: BuzzSumoArticle[]): NewsData => {
@@ -114,13 +175,13 @@ export const mergeNewsWithBuzzSumo = (googleNews: NewsData, buzzsumoArticles: Bu
  * Creates a prompt for Gemini to use Google Search to find and process news.
  */
 const createPrompt = (startDate: string, endDate: string) => `
-You are a world-class investigative intelligence AI. Your mission is to conduct an exhaustive search of Google News to uncover the MOST IMPORTANT and STRATEGICALLY RELEVANT telecommunications news from the Philippines. Leave no stone unturned.
+You are a world-class investigative intelligence AI. Your mission is to search Google News to uncover the MOST IMPORTANT and STRATEGICALLY RELEVANT telecommunications news from the Philippines between **${startDate} and ${endDate}**.
 
-**MANDATORY VERIFICATION PROTOCOL (NON-NEGOTIABLE):**
+**SEARCH QUALITY GUIDELINES:**
 
-1.  **ON-PAGE DATE VERIFICATION:** You are REQUIRED to visit every single potential article link. You must locate the publication date ON THE PAGE CONTENT ITSELF. This date must fall strictly between **${startDate} and ${endDate}**. Dates from Google search results are NOT acceptable. Any article outside the date range or without a visible date on the page is to be DISCARDED.
-2.  **LINK INTEGRITY CHECK:** You MUST confirm that every link is live and resolves correctly. DISCARD all articles with "404 Not Found" errors, broken links, or paywalls that prevent content access.
-3.  **CORROBORATION MANDATE:** For any event you classify as 'High Importance' (see below), you MUST attempt to find at least one other reputable source reporting the same event. This is crucial for verifying its significance. Note the corroborating source, even if you don't include it in the final output.
+1.  **Date Filtering:** Focus your search on articles published between ${startDate} and ${endDate}. Use date operators in your queries (after:${startDate} before:${endDate}).
+2.  **Source Quality:** Prioritize reputable Philippine news sources like PhilStar, BusinessWorld, Manila Bulletin, Rappler, Inquirer, and official government sites (gov.ph, officialgazette.gov.ph).
+3.  **Relevance Verification:** For major stories, look for multiple sources reporting the same event to confirm significance.
 
 **PRIMARY DIRECTIVE: Distinguishing Signal from Noise**
 
@@ -139,61 +200,36 @@ Your primary function is to filter out routine announcements and focus only on n
     *   **Minor Operational Updates:** Small, localized service expansions or network maintenance announcements.
     *   **Daily Stock Price Changes:** Do not report on stock fluctuations unless directly tied to a 'High Importance' event.
 
-**EXHAUSTIVE SEARCH PLAYBOOK: A Multi-Vector Investigative Workflow**
+**SEARCH STRATEGY:**
 
-**Phase 1: High-Level Intelligence Sweep**
-*   **Goal:** Establish a baseline understanding of the key events in the date range.
-*   **Initial Queries:**
-    *   \`philippine telecommunications industry news ${startDate}..${endDate}\`
-    *   \`DICT OR NTC major announcements philippines ${startDate}..${endDate}\`
-    *   \`philippine telco news ${startDate}..${endDate} (site:philstar.com OR site:mb.com.ph OR site:bworldonline.com OR site:rappler.com OR site:inquirer.net)\`
-*   **Noise-Filtering Queries:**
-    *   \`philippine telco news ${startDate}..${endDate} -promo -plan -csr -award -celebrity\`
-    *   \`philippines telecommunications after:${startDate} before:${endDate} ("breaking news" OR "announced" OR "launched")\`
+Conduct focused searches covering these key areas:
 
-**Phase 2: Thematic & Regional Deep Dives**
-*   **Goal:** Investigate specific high-impact themes and geographic areas.
-*   **High-Priority Search Vectors (Use advanced operators):**
-    *   **Infrastructure:** \`("subsea cable" OR "fiber backbone" OR "data center" OR "cell tower" OR "base station") AND (philippines OR luzon OR visayas OR mindanao) after:${startDate} before:${endDate}\`
-    *   **Technology:** \`("5G SA" OR "5G standalone" OR "Open RAN" OR "LEO satellite" OR "Starlink" OR "WiFi 6" OR "WiFi 7" OR "IoT" OR "edge computing" OR "cloud infrastructure") AND (PLDT OR Globe OR Converge OR DITO) after:${startDate} before:${endDate}\`
-    *   **Regulatory:** \`(DICT OR NTC OR "Department of ICT" OR "National Telecommunications Commission") AND ("spectrum auction" OR "policy" OR "circular" OR "national security" OR "license" OR "permit") site:gov.ph OR site:officialgazette.gov.ph after:${startDate} before:${endDate}\`
-    *   **Financial:** \`("billion peso" OR "million dollar" OR "investment" OR "capex" OR "capital expenditure" OR "earnings" OR "revenue growth") AND ("PLDT" OR "Globe Telecom" OR "Converge ICT" OR "DITO Telecommunity") after:${startDate} before:${endDate}\`
-    *   **Partnerships & M&A:** \`("partnership" OR "alliance" OR "acquisition" OR "merger" OR "joint venture" OR "collaboration") AND (PLDT OR Globe OR Converge OR DITO) AND philippines after:${startDate} before:${endDate}\`
-*   **Regional Focus:** Conduct specific searches for developments outside Metro Manila:
-    *   \`(DITO OR PLDT OR Globe OR Converge) AND ("Cebu" OR "Davao" OR "Iloilo" OR "Cagayan de Oro" OR "Bacolod" OR "General Santos") AND ("network expansion" OR "fiber rollout" OR "5G") after:${startDate} before:${endDate}\`
-    *   \`philippine telecommunications AND ("provincial" OR "rural" OR "underserved areas") after:${startDate} before:${endDate}\`
-*   **Global Context:** Search for global trends with direct Philippine impact:
-    *   \`"southeast asia" ("subsea cable" OR "data center" OR "cloud region") AND (philippines OR manila) after:${startDate} before:${endDate}\`
-    *   \`("Starlink" OR "SpaceX" OR "LEO satellite") AND philippines after:${startDate} before:${endDate}\`
+1.  **General Industry News:**
+    *   \`philippine telecommunications news after:${startDate} before:${endDate}\`
+    *   \`philippines telco infrastructure 5G fiber after:${startDate} before:${endDate}\`
+    *   \`DICT NTC policy regulation philippines after:${startDate} before:${endDate}\`
 
-**Phase 3: Forensic Company-Level Investigation**
-*   **Goal:** Uncover all significant news for PLDT, Globe Telecom, Converge ICT, and DITO Telecommunity.
-*   **PERSISTENCE MANDATE:** An empty result is a sign of an incomplete search. Before concluding no news exists for a company, you **MUST execute at least EIGHT different, complex search queries** combining the company name with keywords from the 'High Importance' list.
-*   **Example Query Chains for PLDT (Apply similar logic to Globe, Converge, DITO):**
-    1.  \`(PLDT OR "PLDT Inc." OR Smart OR TNT OR "TM") AND ("billion peso" OR "capex" OR "net income" OR "quarterly results" OR partnership OR acquisition) after:${startDate} before:${endDate}\`
-    2.  \`(PLDT OR "PLDT Inc.") AND ("5G network" OR "fiber expansion" OR "subsea cable" OR "data center" OR "base station" OR "fiber optic") after:${startDate} before:${endDate}\`
-    3.  \`(PLDT OR "PLDT Inc.") AND (DICT OR NTC OR "regulatory filing" OR "spectrum" OR "license") after:${startDate} before:${endDate}\`
-    4.  \`(PLDT OR "PLDT Inc.") filetype:pdf ("press release" OR "investor relations" OR "earnings report") after:${startDate} before:${endDate}\`
-    5.  \`"Manuel Pangilinan" OR "Manny Pangilinan" OR "MVP" AND (PLDT OR Smart) AND ("announced" OR "said" OR "investment" OR "expansion") after:${startDate} before:${endDate}\`
-    6.  \`(PLDT OR "PLDT Inc.") AND ("network outage" OR "service disruption" OR "cybersecurity" OR "customer complaint" OR "NTC complaint") after:${startDate} before:${endDate}\`
-    7.  \`(PLDT OR "PLDT Inc.") AND ("cloud services" OR "enterprise" OR "SME" OR "corporate clients" OR "digital transformation") after:${startDate} before:${endDate}\`
-    8.  \`(PLDT OR "PLDT Inc.") AND ("awards" OR "recognition") AND ("network quality" OR "fastest" OR "best") after:${startDate} before:${endDate}\`
+2.  **Major Telco Companies (PLDT, Globe Telecom, Converge ICT, DITO Telecommunity):**
+    *   Search for each company using multiple queries:
+    *   \`"[Company Name]" philippines news after:${startDate} before:${endDate}\`
+    *   \`"[Company Name]" (investment OR expansion OR 5G OR fiber) after:${startDate} before:${endDate}\`
+    *   \`"[Company Name]" (earnings OR financial OR revenue) philippines after:${startDate} before:${endDate}\`
 
-*   **Key Executive Names to Search:**
-    *   **PLDT:** "Manuel Pangilinan" OR "Manny Pangilinan" OR "MVP", "Alfredo Panlilio", "Anabelle Chua"
-    *   **Globe:** "Ernest Cu", "Gerhard Tan"
-    *   **Converge:** "Dennis Anthony Uy", "Maria Grace Uy"
-    *   **DITO:** "Dennis Uy", "Adel Tamano"
+3.  **Global News with Philippine Impact:**
+    *   \`"southeast asia" telecommunications philippines after:${startDate} before:${endDate}\`
+    *   \`subsea cable data center philippines after:${startDate} before:${endDate}\`
 
-**Phase 4: Final Review & Synthesis (Self-Correction Loop)**
-*   **Goal:** Before generating the JSON, review all your findings.
-*   **Critical Questions:** "Have I missed an angle? Have I over-relied on a single source for a major story? Could a different combination of keywords reveal something new? Is my final selection truly the most strategic news, or just the easiest to find?"
+**Search Tips:**
+*   Use negative keywords to filter noise: \`-promo -celebrity -award -csr\`
+*   Try different keyword combinations if initial results are limited
+*   If a company has no important news, it's acceptable to return an empty array for that company
 
 **Instructions for Output:**
 
-*   After this exhaustive process, select up to three (3) of the most important articles for the "Global News" category and up to five (5) for the "General Industry News" category.
+*   Select the most important and strategic articles for each category
+*   Focus on quality over quantity - it's better to have fewer high-quality articles than many mediocre ones
 *   Your entire response MUST be a single, valid JSON object. No introductory text, comments, or markdown.
-*   **CRITICAL JSON SYNTAX**: The JSON must be perfectly valid. Ensure there are **no trailing commas**. This is a mission-critical requirement.
+*   **CRITICAL JSON SYNTAX**: The JSON must be perfectly valid. Ensure there are **no trailing commas**.
 
 **JSON Output Structure (Strictly Enforced):**
 
@@ -201,17 +237,17 @@ The top-level JSON object must have three keys: "internationalNews", "generalNew
 
 - \`"internationalNews"\`: An array of article objects for global news with Philippine impact. If none found, return an empty array \`[]\`.
 - \`"generalNews"\`: An array of article objects for the general industry news. If no important news is found, return an empty array \`[]\`.
-- \`"companyNews"\`: An array of objects. **You MUST create an object for EACH of the four companies listed above.**
+- \`"companyNews"\`: An array of objects. **You MUST create an object for EACH of the four companies: PLDT, Globe Telecom, Converge ICT, and DITO Telecommunity.**
     *   Each object in this array must have two keys:
-        *   \`"companyName"\`: The name of the company (e.g., "PLDT").
-        *   \`"articles"\`: An array of article objects for that company. If, after a thorough search, you find no *important* news for a company that meets all verification criteria, this MUST be an empty array \`[]\`.
+        *   \`"companyName"\`: The name of the company (e.g., "PLDT", "Globe Telecom", "Converge ICT", "DITO Telecommunity").
+        *   \`"articles"\`: An array of article objects for that company. If you find no important news for a company in the date range, this MUST be an empty array \`[]\`.
 
 **Article Object Structure (must be exact):**
 - "title": The exact title of the article.
-- "date": The verified on-page date (e.g., "October 22, 2025").
-- "summary": A concise summary of the article's main points.
-- "takeaways": An array of exactly two distinct, insightful bullet points.
-- "source": An object with "title" (source website name) and "uri" (the article's URL).
+- "date": The publication date from the search results (e.g., "October 22, 2025" or "Oct 22, 2025").
+- "summary": A concise summary of the article's main points (2-3 sentences).
+- "takeaways": An array of exactly two distinct, insightful bullet points highlighting key implications.
+- "source": An object with "title" (source website name like "PhilStar" or "Manila Bulletin") and "uri" (the article's URL from search results).
 `;
 
 export const fetchTelcoNews = async (startDate: string, endDate: string): Promise<{ data: NewsData }> => {
@@ -282,30 +318,38 @@ export const fetchTelcoNews = async (startDate: string, endDate: string): Promis
 
             for (const article of allNews) {
                 // Check if the URI is a problematic grounding redirect
-                if (article.source.uri.includes('vertexaisearch.cloud.google.com')) {
+                // These can appear as vertexaisearch.cloud.google.com or grounding-api-redirect URLs
+                if (article.source.uri.includes('vertexaisearch') || article.source.uri.includes('grounding-api-redirect')) {
+                    console.log(`🔍 Detected broken grounding link for article: "${article.title}"`);
+                    console.log(`   Broken URI: ${article.source.uri}`);
+
                     // Find the correct grounding chunk by matching the article title.
                     // This is more reliable than matching the URI which we know is wrong.
-                    const matchedChunk = groundingChunks.find(chunk => 
+                    const matchedChunk = groundingChunks.find(chunk =>
                         'web' in chunk && chunk.web.title && article.title.trim() === chunk.web.title.trim()
                     );
 
                     if (matchedChunk && 'web' in matchedChunk) {
                         // Found a match. Replace the broken URI with the correct one.
+                        console.log(`   ✅ Fixed! New URI: ${matchedChunk.web.uri}`);
                         article.source.uri = matchedChunk.web.uri;
                         // Also update the source title for consistency.
                         article.source.title = matchedChunk.web.title;
                     } else {
                         // If exact match fails, try a more lenient search.
-                        const lenientMatchedChunk = groundingChunks.find(chunk => 
-                            'web' in chunk && chunk.web.title && 
+                        console.log(`   ⚠️  Exact title match failed, trying lenient match...`);
+                        const lenientMatchedChunk = groundingChunks.find(chunk =>
+                            'web' in chunk && chunk.web.title &&
                             (article.title.includes(chunk.web.title) || chunk.web.title.includes(article.title))
                         );
                         if (lenientMatchedChunk && 'web' in lenientMatchedChunk) {
+                            console.log(`   ✅ Fixed with lenient match! New URI: ${lenientMatchedChunk.web.uri}`);
                             article.source.uri = lenientMatchedChunk.web.uri;
                             article.source.title = lenientMatchedChunk.web.title;
                         } else {
                             // Log a warning if no match is found, the link will remain broken.
-                            console.warn(`Could not fix a broken grounding link for article: "${article.title}" as no matching source was found in the metadata.`);
+                            console.warn(`   ❌ Could not fix broken grounding link - no matching source found in metadata`);
+                            console.warn(`   Available grounding chunks: ${groundingChunks.length}`);
                         }
                     }
                 }
@@ -338,7 +382,18 @@ ${JSON.stringify(newsData, null, 2)}
     - Some articles may already have a \`thumbnailUrl\` field with an existing image URL.
     - For slides based on articles WITH a \`thumbnailUrl\`, include it in the slide's \`imageUrl\` field and still provide an \`imageDescription\`.
     - For slides without a \`thumbnailUrl\`, only provide an \`imageDescription\` (the image will be sourced later).
-    - Image descriptions should be detailed, specific, and visually interesting for stock photo search. Example: "A sleek, modern fiber optic cable glowing with blue light against a dark, abstract background, symbolizing high-speed connectivity."
+    - **CRITICAL**: Image descriptions should be detailed, specific, and visually interesting for stock photo search.
+    - **PREFERRED APPROACH**: Use images WITHOUT people or faces to avoid racial representation issues. Examples:
+      * "Sleek fiber optic cables glowing with blue light against dark background"
+      * "Modern 5G cell tower against Manila skyline at sunset"
+      * "Abstract digital network connections with Philippine map overlay"
+      * "Smartphone showing fast internet speed test with glowing screen"
+      * "Futuristic server room with blue lighting and cable management"
+    - **ONLY IF PEOPLE ARE NECESSARY**: Specify "Filipino" or "Asian" people explicitly. Examples:
+      * "Filipino business executives in modern suits shaking hands in a bright corporate office"
+      * "Asian woman working on laptop in modern office with technology background"
+      * "Filipino tech workers collaborating around a conference table with network diagrams"
+    - **IMPORTANT**: Prefer technology, infrastructure, objects, and abstract concepts over images with people whenever possible.
 6.  **Output Format:** Your entire response MUST be a single, valid JSON object conforming to the specified structure. Do not include any introductory text, comments, or markdown. Ensure there are no trailing commas.
 
 **Presentation Structure:**
@@ -489,7 +544,7 @@ const searchPexelsImage = async (searchQuery: string): Promise<string | null> =>
 
     try {
         const query = encodeURIComponent(searchQuery);
-        const url = `https://api.pexels.com/v1/search?query=${query}&per_page=1&orientation=landscape`;
+        const url = `https://api.pexels.com/v1/search?query=${query}&per_page=3&orientation=landscape`;
 
         const response = await fetch(url, {
             headers: {
@@ -505,7 +560,9 @@ const searchPexelsImage = async (searchQuery: string): Promise<string | null> =>
         const data = await response.json();
 
         if (data.photos && data.photos.length > 0) {
-            const imageUrl = data.photos[0].src.large; // 1280px width
+            // Try to find an image with proper CORS support
+            // Pexels images generally have good CORS support, use the original size for better quality
+            const imageUrl = data.photos[0].src.original || data.photos[0].src.large2x || data.photos[0].src.large;
             console.log(`Found Pexels image: ${imageUrl}`);
             return imageUrl;
         }
@@ -518,6 +575,22 @@ const searchPexelsImage = async (searchQuery: string): Promise<string | null> =>
 };
 
 /**
+ * Tests if an image URL can be fetched with CORS (for PowerPoint export)
+ */
+const testImageCORS = async (url: string): Promise<boolean> => {
+    try {
+        const response = await fetch(url, {
+            method: 'HEAD',
+            mode: 'cors',
+            cache: 'no-cache'
+        });
+        return response.ok;
+    } catch {
+        return false;
+    }
+};
+
+/**
  * Finds or uses an existing image for an article slide
  * Priority: 1) Existing imageUrl (from BuzzSumo), 2) Pexels search, 3) Unsplash search
  */
@@ -525,22 +598,57 @@ const findImageForArticle = async (slide: { imageUrl?: string; headline: string;
     try {
         // Priority 1: Use existing imageUrl if available (from BuzzSumo thumbnail)
         if (slide.imageUrl) {
-            console.log(`Using existing thumbnail for: "${slide.headline}"`);
-            return slide.imageUrl;
+            console.log(`Testing CORS for existing thumbnail: "${slide.headline}"`);
+            const corsSupported = await testImageCORS(slide.imageUrl);
+
+            if (corsSupported) {
+                console.log(`✓ CORS supported, using thumbnail: "${slide.headline}"`);
+                return slide.imageUrl;
+            } else {
+                console.warn(`✗ CORS blocked for thumbnail, falling back to stock photos: "${slide.headline}"`);
+                // Don't return the image - fall through to stock photo search
+            }
         }
 
-        // Extract key terms from headline for better search results
-        const searchTerms = slide.headline
-            .toLowerCase()
-            .replace(/[^\w\s]/g, '')
-            .split(' ')
-            .filter(word => word.length > 4 && !['about', 'their', 'which', 'where', 'these'].includes(word))
-            .slice(0, 3) // Use top 3 meaningful words
-            .join(' ');
+        // Priority 2: Use imageDescription if available (more specific than headline)
+        let searchQuery = '';
+        if (slide.imageDescription) {
+            // Check if the description mentions people
+            const hasPeople = /people|person|man|woman|executive|worker|employee|staff|professional|team|business people|Filipino|Asian/i.test(slide.imageDescription);
 
-        const searchQuery = `${searchTerms} technology business`;
+            if (hasPeople) {
+                // STRICT: Only search with Filipino/Asian keywords if explicitly mentioned
+                const hasFilipinoAsian = /Filipino|Asian/i.test(slide.imageDescription);
 
-        // Priority 2: Search Pexels (instant access, 200 req/hour)
+                if (hasFilipinoAsian) {
+                    // Good - Filipino/Asian was specified in the description
+                    searchQuery = `${slide.imageDescription} Philippines`;
+                    console.log(`🇵🇭 Using Filipino/Asian people image: "${searchQuery}"`);
+                } else {
+                    // Bad - people mentioned but not Filipino/Asian. Try to filter them out
+                    // by focusing on technology keywords instead
+                    console.warn(`⚠️ People mentioned without Filipino/Asian specification. Searching for technology imagery instead.`);
+                    searchQuery = `technology telecommunications modern abstract Philippines`;
+                }
+            } else {
+                // Good - no people, use description as-is
+                searchQuery = `${slide.imageDescription} Philippines technology`;
+                console.log(`✓ No people in image description: "${searchQuery}"`);
+            }
+        } else {
+            // Fallback: Extract key terms from headline - avoid people
+            const searchTerms = slide.headline
+                .toLowerCase()
+                .replace(/[^\w\s]/g, '')
+                .split(' ')
+                .filter(word => word.length > 4 && !['about', 'their', 'which', 'where', 'these'].includes(word))
+                .slice(0, 3)
+                .join(' ');
+
+            searchQuery = `${searchTerms} technology abstract Philippines`;
+        }
+
+        // Priority 2: Search Pexels (instant access, 200 req/hour, excellent CORS support)
         console.log(`Searching Pexels for: "${slide.headline}"`);
         const pexelsUrl = await searchPexelsImage(searchQuery);
         if (pexelsUrl) {
