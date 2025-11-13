@@ -251,10 +251,11 @@ The top-level JSON object must have three keys: "internationalNews", "generalNew
 `;
 
 export const fetchTelcoNews = async (startDate: string, endDate: string): Promise<{ data: NewsData }> => {
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set. Please set it in your environment.");
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error("VITE_GEMINI_API_KEY environment variable not set. Please set it in your .env.local file.");
     }
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const prompt = createPrompt(startDate, endDate);
     let responseText = '';
 
@@ -672,11 +673,12 @@ const findImageForArticle = async (slide: { imageUrl?: string; headline: string;
 
 
 export const generatePresentationFromNews = async (newsData: NewsData, dateRange: string): Promise<Presentation> => {
-    if (!process.env.API_KEY) {
-        throw new Error("API_KEY environment variable not set.");
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error("VITE_GEMINI_API_KEY environment variable not set. Please set it in your .env.local file.");
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const prompt = createPresentationPrompt(newsData, dateRange);
     let responseText = '';
 
