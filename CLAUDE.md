@@ -76,15 +76,17 @@ VITE_UNSPLASH_ACCESS_KEY=your_unsplash_access_key_here
 - `fetchTelcoNews()`: Calls Gemini with search grounding for news retrieval
 - `generatePresentationFromNews()`: Generates presentation slides with image descriptions
 - `mergeNewsWithBuzzSumo()`: Intelligent deduplication and merging
+- `isBrokenGroundingUrl()`: Detects expired Gemini grounding redirect URLs
+- `fixPresentationUrls()`: Post-processes presentation to fix broken URLs using title matching
 - Pexels/Unsplash integration for stock images when thumbnails are missing
 
 ### Type System (`types.ts`)
 
 All data structures are strictly typed:
-- `NewsArticle`: Standard article format with thumbnails
+- `NewsArticle`: Standard article format with thumbnails and `_urlBroken` flag
 - `BuzzSumoArticle`: Raw BuzzSumo response with engagement metrics
 - `Presentation`: Slide-based presentation structure
-- `Slide`: Union type supporting multiple slide layouts
+- `Slide`: Union type supporting multiple slide layouts, news slides include `_urlBroken` flag
 
 ### Component Structure
 
@@ -119,11 +121,51 @@ The `urlToBase64()` function implements a two-stage approach:
 - **Grounding link fixing**: App attempts to match broken grounding links with BuzzSumo metadata by title matching
 - Presentation generation uses structured prompts with JSON schema enforcement
 
+### Broken URL Handling (Grounding Link Fix)
+
+Google Gemini's grounding API returns temporary redirect URLs (`vertexaisearch.cloud.google.com/grounding-api-redirect/...`) that can expire or return 404 errors. The app handles this at multiple levels:
+
+**1. Backend URL Validation (`backend/server.js`):**
+- Validates each article URL after Gemini response
+- Follows redirects to resolve final URLs
+- Matches broken URLs against BuzzSumo articles by title similarity
+- Sets `_urlBroken: true` flag on articles that can't be fixed
+
+**2. Frontend Presentation Fix (`services/geminiService.ts`):**
+```typescript
+// Detection function
+const isBrokenGroundingUrl = (url: string): boolean => {
+  return url.includes('vertexaisearch') || url.includes('grounding-api-redirect');
+};
+
+// Title matching with multiple strategies:
+// - Exact match (case-insensitive)
+// - Substring containment
+// - Word overlap (70% threshold)
+const fixPresentationUrls = (presentation: Presentation, newsData: NewsData): Presentation => {
+  // Matches slide headlines to source articles
+  // Uses validated URLs from news data
+  // Falls back to marking slide as broken
+};
+```
+
+**3. UI Graceful Degradation:**
+- `NewsCard.tsx`: Shows "Link Issue" badge and "Search for Article" button
+- `PresentationViewer.tsx`:
+  - Web viewer: Shows amber "Search for Article" button for broken URLs
+  - PowerPoint export: Uses amber-colored Google search hyperlinks
+
+**Google Search Fallback URL Format:**
+```
+https://www.google.com/search?q={headline}+{sourceTitle}
+```
+
 ### Error Handling Philosophy
 
 - **BuzzSumo failures**: Non-critical - app continues with Gemini data only
 - **Gemini failures**: Critical - displays error to user
 - **Image conversion failures**: Logged but non-blocking for PowerPoint export
+- **Broken URL failures**: Graceful degradation to Google search fallback
 - All async operations use `Promise.allSettled()` for graceful degradation
 
 ## Common Gotchas
@@ -131,7 +173,7 @@ The `urlToBase64()` function implements a two-stage approach:
 1. **Environment variables**: Client-side variables need `VITE_` prefix; accessed via `import.meta.env.VITE_*`
 2. **CORS for images**: Some news sites block cross-origin image access; dual-method approach minimizes but doesn't eliminate this
 3. **BuzzSumo date format**: Unix timestamps, not ISO strings
-4. **Gemini grounding links**: May be broken; app fixes them by title matching against BuzzSumo metadata
+4. **Gemini grounding links**: Temporary redirect URLs that expire; detected by `vertexaisearch` or `grounding-api-redirect` in URL; fixed via backend validation + title matching; unfixable URLs get `_urlBroken: true` flag
 5. **Sports filtering**: Very aggressive to avoid "Converge FiberXers" and "DITO" (Tagalog for "here") false positives
 
 ## Testing
