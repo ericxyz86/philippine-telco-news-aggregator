@@ -8,6 +8,8 @@ export interface NewsArticle {
     uri: string;
   };
   thumbnailUrl?: string; // From BuzzSumo or other sources
+  _urlBroken?: boolean; // Flag set by backend when URL validation fails
+  isBuzzSumoTrending?: boolean; // Flag to mark high-engagement BuzzSumo articles
 }
 
 export interface CompanyNewsSection {

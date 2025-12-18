@@ -8,6 +8,168 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ==================== URL RESOLUTION & VALIDATION ====================
+
+/**
+ * Attempts to resolve a URL by following redirects and returns the final destination URL.
+ * This is critical for fixing broken Google grounding redirect URLs.
+ */
+const resolveUrl = async (url, maxRedirects = 5) => {
+  try {
+    let currentUrl = url;
+    let redirectCount = 0;
+
+    while (redirectCount < maxRedirects) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+      try {
+        const response = await fetch(currentUrl, {
+          method: 'HEAD',
+          redirect: 'manual', // Don't auto-follow redirects
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          }
+        });
+
+        clearTimeout(timeout);
+
+        // Check for redirect
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get('location');
+          if (location) {
+            // Handle relative URLs
+            currentUrl = new URL(location, currentUrl).href;
+            redirectCount++;
+            console.log(`   ↪ Redirect ${redirectCount}: ${currentUrl}`);
+            continue;
+          }
+        }
+
+        // Check if URL is valid (2xx response)
+        if (response.ok) {
+          return { url: currentUrl, valid: true };
+        }
+
+        // Non-redirect, non-success response
+        return { url: currentUrl, valid: false, status: response.status };
+      } catch (fetchError) {
+        clearTimeout(timeout);
+        // Try GET request if HEAD fails (some servers don't support HEAD)
+        if (fetchError.name !== 'AbortError' && redirectCount === 0) {
+          try {
+            const getResponse = await fetch(currentUrl, {
+              method: 'GET',
+              redirect: 'follow',
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+              }
+            });
+            if (getResponse.ok) {
+              return { url: getResponse.url, valid: true };
+            }
+          } catch {
+            // Ignore GET error
+          }
+        }
+        throw fetchError;
+      }
+    }
+
+    return { url: currentUrl, valid: false, reason: 'Too many redirects' };
+  } catch (error) {
+    return { url: url, valid: false, reason: error.message };
+  }
+};
+
+/**
+ * Validates if a URL returns a successful response (2xx)
+ */
+const validateUrl = async (url) => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+
+    clearTimeout(timeout);
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Normalizes a title for comparison
+ */
+const normalizeTitle = (title) => {
+  return title.toLowerCase()
+    .replace(/[^\w\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+/**
+ * Calculates similarity between two titles (0-1)
+ */
+const calculateTitleSimilarity = (title1, title2) => {
+  const norm1 = normalizeTitle(title1);
+  const norm2 = normalizeTitle(title2);
+
+  if (norm1 === norm2) return 1.0;
+
+  const words1 = new Set(norm1.split(' '));
+  const words2 = new Set(norm2.split(' '));
+
+  const intersection = [...words1].filter(w => words2.has(w)).length;
+  const union = new Set([...words1, ...words2]).size;
+
+  return union > 0 ? intersection / union : 0;
+};
+
+/**
+ * Finds the best matching BuzzSumo article for a given title
+ */
+const findMatchingBuzzSumoUrl = (title, buzzsumoArticles) => {
+  if (!buzzsumoArticles || buzzsumoArticles.length === 0) {
+    return null;
+  }
+
+  let bestMatch = null;
+  let bestSimilarity = 0;
+
+  for (const article of buzzsumoArticles) {
+    const similarity = calculateTitleSimilarity(title, article.title);
+    if (similarity > bestSimilarity && similarity >= 0.5) { // 50% threshold
+      bestSimilarity = similarity;
+      bestMatch = article;
+    }
+  }
+
+  if (bestMatch) {
+    console.log(`   📰 Found BuzzSumo match (${(bestSimilarity * 100).toFixed(0)}% similar): "${bestMatch.title}"`);
+    return bestMatch.url;
+  }
+
+  return null;
+};
+
+/**
+ * Checks if a URL is a broken Google grounding redirect URL
+ */
+const isBrokenGroundingUrl = (url) => {
+  return url.includes('vertexaisearch') ||
+         url.includes('grounding-api-redirect') ||
+         url.includes('googleusercontent.com/grounding');
+};
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -379,34 +541,140 @@ const fetchGeminiNews = async (startDate, endDate) => {
       throw new Error("API response is not in the expected NewsData format");
     }
 
-    // Fix broken grounding links
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks && groundingChunks.length > 0) {
-      const companyArticles = parsedData.companyNews.flatMap(section => section.articles);
-      const allNews = [...parsedData.internationalNews, ...parsedData.generalNews, ...companyArticles];
+    // Extract grounding chunks for potential URL fixing
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
 
-      for (const article of allNews) {
-        if (article.source.uri.includes('vertexaisearch') || article.source.uri.includes('grounding-api-redirect')) {
-          console.log(`🔍 Detected broken grounding link for article: "${article.title}"`);
+    return { parsedData, groundingChunks };
+  } catch (error) {
+    console.error("Error fetching Gemini news:", error);
+    throw error;
+  }
+};
 
-          const matchedChunk = groundingChunks.find(chunk =>
-            'web' in chunk && chunk.web.title && article.title.trim() === chunk.web.title.trim()
-          );
+/**
+ * Fixes and validates all article URLs in the news data.
+ * Uses multiple strategies:
+ * 1. Resolve redirect URLs by following them
+ * 2. Match against grounding metadata chunks
+ * 3. Fall back to BuzzSumo articles with matching titles
+ * 4. Validate final URLs actually work
+ */
+const fixAndValidateArticleUrls = async (parsedData, groundingChunks, buzzsumoArticles) => {
+  const companyArticles = parsedData.companyNews.flatMap(section => section.articles);
+  const allNews = [...parsedData.internationalNews, ...parsedData.generalNews, ...companyArticles];
+
+  console.log(`\n🔗 Validating ${allNews.length} article URLs...`);
+
+  let fixedCount = 0;
+  let validatedCount = 0;
+  let failedArticles = [];
+
+  for (const article of allNews) {
+    const originalUrl = article.source.uri;
+    let currentUrl = originalUrl;
+    let urlFixed = false;
+
+    console.log(`\n📰 "${article.title.substring(0, 50)}..."`);
+    console.log(`   Original URL: ${originalUrl.substring(0, 80)}...`);
+
+    // Step 1: Check if it's a broken grounding URL
+    if (isBrokenGroundingUrl(currentUrl)) {
+      console.log(`   ⚠️  Detected broken grounding redirect URL`);
+
+      // Step 2a: Try to resolve the redirect URL
+      console.log(`   🔄 Attempting to resolve redirect...`);
+      const resolved = await resolveUrl(currentUrl);
+
+      if (resolved.valid && !isBrokenGroundingUrl(resolved.url)) {
+        console.log(`   ✅ Resolved to: ${resolved.url}`);
+        currentUrl = resolved.url;
+        urlFixed = true;
+      } else {
+        console.log(`   ❌ Redirect resolution failed: ${resolved.reason || `Status ${resolved.status}`}`);
+
+        // Step 2b: Try to find URL in grounding chunks by title matching
+        if (groundingChunks.length > 0) {
+          console.log(`   🔍 Searching grounding chunks for match...`);
+          const matchedChunk = groundingChunks.find(chunk => {
+            if (!('web' in chunk) || !chunk.web.title || !chunk.web.uri) return false;
+            // Check if grounding chunk URL is also broken
+            if (isBrokenGroundingUrl(chunk.web.uri)) return false;
+            const similarity = calculateTitleSimilarity(article.title, chunk.web.title);
+            return similarity >= 0.6;
+          });
 
           if (matchedChunk && 'web' in matchedChunk) {
-            console.log(`   ✅ Fixed! New URI: ${matchedChunk.web.uri}`);
-            article.source.uri = matchedChunk.web.uri;
+            console.log(`   ✅ Found grounding chunk match: ${matchedChunk.web.uri}`);
+            currentUrl = matchedChunk.web.uri;
             article.source.title = matchedChunk.web.title;
+            urlFixed = true;
+          }
+        }
+
+        // Step 2c: Try to find matching BuzzSumo article
+        if (!urlFixed) {
+          console.log(`   🔍 Searching BuzzSumo articles for match...`);
+          const buzzsumoUrl = findMatchingBuzzSumoUrl(article.title, buzzsumoArticles);
+          if (buzzsumoUrl) {
+            console.log(`   ✅ Found BuzzSumo match: ${buzzsumoUrl}`);
+            currentUrl = buzzsumoUrl;
+            urlFixed = true;
           }
         }
       }
     }
 
-    return parsedData;
-  } catch (error) {
-    console.error("Error fetching Gemini news:", error);
-    throw error;
+    // Step 3: Validate the URL (whether original or fixed)
+    if (currentUrl !== originalUrl || !isBrokenGroundingUrl(currentUrl)) {
+      console.log(`   🔍 Validating URL...`);
+      const isValid = await validateUrl(currentUrl);
+
+      if (isValid) {
+        console.log(`   ✅ URL validated successfully`);
+        article.source.uri = currentUrl;
+        validatedCount++;
+        if (urlFixed) fixedCount++;
+      } else {
+        console.log(`   ❌ URL validation failed`);
+
+        // Last resort: Try BuzzSumo if we haven't already
+        if (!urlFixed) {
+          const buzzsumoUrl = findMatchingBuzzSumoUrl(article.title, buzzsumoArticles);
+          if (buzzsumoUrl) {
+            const buzzValid = await validateUrl(buzzsumoUrl);
+            if (buzzValid) {
+              console.log(`   ✅ BuzzSumo fallback succeeded: ${buzzsumoUrl}`);
+              article.source.uri = buzzsumoUrl;
+              validatedCount++;
+              fixedCount++;
+            } else {
+              failedArticles.push(article);
+            }
+          } else {
+            failedArticles.push(article);
+          }
+        } else {
+          failedArticles.push(article);
+        }
+      }
+    } else {
+      failedArticles.push(article);
+    }
   }
+
+  console.log(`\n📊 URL Validation Summary:`);
+  console.log(`   Total articles: ${allNews.length}`);
+  console.log(`   Successfully validated: ${validatedCount}`);
+  console.log(`   URLs fixed: ${fixedCount}`);
+  console.log(`   Failed to fix: ${failedArticles.length}`);
+
+  // Mark failed articles so frontend can handle them
+  for (const article of failedArticles) {
+    article._urlBroken = true;
+    console.log(`   ⚠️  Broken URL for: "${article.title.substring(0, 50)}..."`);
+  }
+
+  return parsedData;
 };
 
 // ==================== API ENDPOINTS ====================
@@ -422,7 +690,9 @@ app.get('/api/news', async (req, res) => {
       });
     }
 
+    console.log(`\n${'='.repeat(60)}`);
     console.log(`Fetching news for ${startDate} to ${endDate}`);
+    console.log(`${'='.repeat(60)}\n`);
 
     // Fetch from both sources in parallel
     const [geminiResult, buzzsumoResult] = await Promise.allSettled([
@@ -445,8 +715,37 @@ app.get('/api/news', async (req, res) => {
       console.warn('BuzzSumo API failed (non-critical):', buzzsumoResult.reason);
     }
 
+    // Extract parsed data and grounding chunks from Gemini result
+    const { parsedData, groundingChunks } = geminiResult.value;
+
+    // Fix and validate all article URLs
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`Starting URL validation and fixing...`);
+    console.log(`${'='.repeat(60)}`);
+
+    const validatedNewsData = await fixAndValidateArticleUrls(
+      parsedData,
+      groundingChunks,
+      buzzsumoArticles
+    );
+
+    // Filter out articles with broken URLs (optional - uncomment to remove them entirely)
+    // This keeps articles but marks them so frontend can handle gracefully
+    /*
+    const filterBrokenUrls = (articles) => articles.filter(a => !a._urlBroken);
+    validatedNewsData.internationalNews = filterBrokenUrls(validatedNewsData.internationalNews);
+    validatedNewsData.generalNews = filterBrokenUrls(validatedNewsData.generalNews);
+    for (const section of validatedNewsData.companyNews) {
+      section.articles = filterBrokenUrls(section.articles);
+    }
+    */
+
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`News fetch complete!`);
+    console.log(`${'='.repeat(60)}\n`);
+
     res.json({
-      geminiNews: geminiResult.value,
+      geminiNews: validatedNewsData,
       buzzsumoArticles: buzzsumoArticles
     });
   } catch (error) {

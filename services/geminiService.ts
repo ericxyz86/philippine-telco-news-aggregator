@@ -17,7 +17,8 @@ const convertBuzzSumoToNewsArticle = (article: BuzzSumoArticle): NewsArticle => 
             title: article.domain_name,
             uri: article.url
         },
-        thumbnailUrl: article.thumbnail // Preserve BuzzSumo thumbnail
+        thumbnailUrl: article.thumbnail, // Preserve BuzzSumo thumbnail
+        isBuzzSumoTrending: true // Mark as BuzzSumo trending article
     };
 };
 
@@ -162,13 +163,21 @@ export const mergeNewsWithBuzzSumo = (googleNews: NewsData, buzzsumoArticles: Bu
         );
     });
 
-    console.log(`Merged ${uniqueBuzzsumoArticles.length} unique BuzzSumo articles (${buzzsumoArticles.length - uniqueBuzzsumoArticles.length} duplicates removed)`);
+    console.log(`📊 BuzzSumo merge stats:`);
+    console.log(`   - Total BuzzSumo articles: ${buzzsumoArticles.length}`);
+    console.log(`   - Duplicates removed: ${buzzsumoArticles.length - uniqueBuzzsumoArticles.length}`);
+    console.log(`   - Unique articles added to generalNews: ${uniqueBuzzsumoArticles.length}`);
+    console.log(`   - Articles marked with isBuzzSumoTrending: ${uniqueBuzzsumoArticles.filter(a => a.isBuzzSumoTrending).length}`);
 
     // Add unique BuzzSumo articles to generalNews section
-    return {
+    const mergedData = {
         ...googleNews,
         generalNews: [...googleNews.generalNews, ...uniqueBuzzsumoArticles]
     };
+
+    console.log(`   - Final generalNews count: ${mergedData.generalNews.length}`);
+
+    return mergedData;
 };
 
 /**
@@ -376,10 +385,13 @@ ${JSON.stringify(newsData, null, 2)}
 
 **Instructions:**
 1.  **Analyze the Data:** Carefully review all the news articles provided in the JSON.
-2.  **Structure the Presentation:** Create a sequence of slides based on the following structure.
-3.  **Be Concise:** Headlines and summaries should be clear, direct, and impactful for a busy executive audience.
-4.  **Strategic Focus:** The "Significance" slide is the most important. Synthesize all the news to provide actionable insights.
-5.  **Image Handling:**
+2.  **IMPORTANT - Include ALL Articles:** You MUST create a slide for EVERY article in the data. Do NOT skip or filter out any articles. This includes:
+    - Articles with \`isBuzzSumoTrending: true\` - these are high-engagement trending articles from social media and MUST be included
+    - All articles from \`generalNews\`, \`internationalNews\`, and \`companyNews\`
+3.  **Structure the Presentation:** Create a sequence of slides based on the following structure.
+4.  **Be Concise:** Headlines and summaries should be clear, direct, and impactful for a busy executive audience.
+5.  **Strategic Focus:** The "Significance" slide is the most important. Synthesize all the news to provide actionable insights.
+6.  **Image Handling:**
     - Some articles may already have a \`thumbnailUrl\` field with an existing image URL.
     - For slides based on articles WITH a \`thumbnailUrl\`, include it in the slide's \`imageUrl\` field and still provide an \`imageDescription\`.
     - For slides without a \`thumbnailUrl\`, only provide an \`imageDescription\` (the image will be sourced later).
@@ -395,7 +407,7 @@ ${JSON.stringify(newsData, null, 2)}
       * "Asian woman working on laptop in modern office with technology background"
       * "Filipino tech workers collaborating around a conference table with network diagrams"
     - **IMPORTANT**: Prefer technology, infrastructure, objects, and abstract concepts over images with people whenever possible.
-6.  **Output Format:** Your entire response MUST be a single, valid JSON object conforming to the specified structure. Do not include any introductory text, comments, or markdown. Ensure there are no trailing commas.
+7.  **Output Format:** Your entire response MUST be a single, valid JSON object conforming to the specified structure. Do not include any introductory text, comments, or markdown. Ensure there are no trailing commas.
 
 **Presentation Structure:**
 
@@ -414,12 +426,15 @@ ${JSON.stringify(newsData, null, 2)}
     *   \`sourceUrl\`: The exact URL from the article's \`source.uri\` field.
     *   \`sourceTitle\`: The source website name from the article's \`source.title\` field.
 
-3.  **Philippines Market & Global Industry News Slides**
+3.  **Philippines Market & Global Industry News Slides (INCLUDING BUZZSUMO TRENDING)**
     *   Identify articles from \`generalNews\` (Philippines market news) and \`internationalNews\` (global industry news).
+    *   **CRITICAL**: The \`generalNews\` array contains BOTH Google News articles AND BuzzSumo trending articles (marked with \`isBuzzSumoTrending: true\`).
+    *   **You MUST include ALL articles from generalNews**, including BuzzSumo trending articles. These trending articles have high social engagement and are important.
+    *   For articles with \`isBuzzSumoTrending: true\`, add "📈 Trending" at the start of the headline to indicate high engagement.
     *   These should appear UNDER "Top Industry News" section, NOT in the competitor section.
     *   For each article, create one \`news\` slide.
     *   \`company\`: Leave undefined or set to "Philippines Market" for generalNews, "Global Industry" for internationalNews.
-    *   \`headline\`: A concise, powerful headline summarizing the article's core message.
+    *   \`headline\`: A concise, powerful headline summarizing the article's core message. Prefix with "📈 Trending: " if \`isBuzzSumoTrending: true\`.
     *   \`summary\`: A brief paragraph explaining the news.
     *   \`imageDescription\`: A short description for a relevant, professional stock photo WITHOUT ANY TEXT.
     *   \`sourceUrl\`: The exact URL from the article's \`source.uri\` field.
@@ -433,12 +448,12 @@ ${JSON.stringify(newsData, null, 2)}
 5.  **Competitor News Slides**
     *   Identify news for "Globe Telecom", "Converge ICT", and "DITO Telecommunity" ONLY.
     *   DO NOT include generalNews or internationalNews here - they belong in the Industry section above.
-    *   For each significant competitor article, create one \`news\` slide with the same structure as the PLDT slides (\`company\`, \`headline\`, \`summary\`, \`imageDescription\`, \`sourceUrl\`, \`sourceTitle\`).
+    *   For each competitor article, create one \`news\` slide with the same structure as the PLDT slides (\`company\`, \`headline\`, \`summary\`, \`imageDescription\`, \`sourceUrl\`, \`sourceTitle\`).
 
 6.  **Slide X: Significance Slide**
     *   Type: \`significance\`
     *   Title: "Significance to Our Business"
-    *   Analyze ALL the provided news items collectively.
+    *   Analyze ALL the provided news items collectively, including trending BuzzSumo articles.
     *   Generate an array of 5 insightful bullet points in the \`points\` field, explaining the strategic implications. These points should cover:
         *   Market reach and competitive positioning.
         *   Financial implications or opportunities.
