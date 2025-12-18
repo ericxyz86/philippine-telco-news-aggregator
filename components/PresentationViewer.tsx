@@ -148,6 +148,9 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
           case 'news':
             pptxSlide.background = { color: 'F8FAFC' };
 
+            // Check if URL is broken
+            const isUrlBroken = slide._urlBroken || (slide.sourceUrl && (slide.sourceUrl.includes('vertexaisearch') || slide.sourceUrl.includes('grounding-api-redirect')));
+
             // Add image if available
             if (slide.imageUrl) {
               try {
@@ -203,18 +206,34 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
               fontFace: 'Roboto',
             });
 
-            // Add source link
-            if (slide.sourceUrl && slide.sourceTitle) {
-              pptxSlide.addText(`Source: ${slide.sourceTitle}`, {
-                x: 5.2,
-                y: 4.4,
-                w: 4.3,
-                h: 0.3,
-                fontSize: 10,
-                color: '2563EB',
-                hyperlink: { url: slide.sourceUrl },
-                fontFace: 'Roboto',
-              });
+            // Add source link - use Google search link if URL is broken
+            if (slide.sourceTitle) {
+              if (isUrlBroken) {
+                // For broken URLs, link to Google search instead
+                const searchQuery = encodeURIComponent(`${slide.headline} ${slide.sourceTitle}`);
+                const googleSearchUrl = `https://www.google.com/search?q=${searchQuery}`;
+                pptxSlide.addText(`Source: ${slide.sourceTitle} (search for article)`, {
+                  x: 5.2,
+                  y: 4.4,
+                  w: 4.3,
+                  h: 0.3,
+                  fontSize: 10,
+                  color: 'D97706', // Amber color to indicate broken link
+                  hyperlink: { url: googleSearchUrl },
+                  fontFace: 'Roboto',
+                });
+              } else if (slide.sourceUrl) {
+                pptxSlide.addText(`Source: ${slide.sourceTitle}`, {
+                  x: 5.2,
+                  y: 4.4,
+                  w: 4.3,
+                  h: 0.3,
+                  fontSize: 10,
+                  color: '2563EB',
+                  hyperlink: { url: slide.sourceUrl },
+                  fontFace: 'Roboto',
+                });
+              }
             }
             break;
 
@@ -319,6 +338,14 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
           </div>
         );
       case 'news':
+        const isBrokenUrl = slide._urlBroken || (slide.sourceUrl && (slide.sourceUrl.includes('vertexaisearch') || slide.sourceUrl.includes('grounding-api-redirect')));
+
+        const handleBrokenLinkClick = () => {
+          // Open Google search for the article headline
+          const searchQuery = encodeURIComponent(`${slide.headline} ${slide.sourceTitle || ''}`);
+          window.open(`https://www.google.com/search?q=${searchQuery}`, '_blank');
+        };
+
         return (
           <div className="flex flex-col md:flex-row h-full gap-8 p-8 md:p-16 bg-slate-50 text-slate-800">
             <div className="w-full md:w-1/2 flex items-center justify-center bg-slate-200 rounded-lg overflow-hidden">
@@ -335,7 +362,18 @@ const PresentationViewer: React.FC<PresentationViewerProps> = ({ presentation, o
               {slide.company && <p className="text-red-600 font-bold text-lg mb-2 tracking-wide">{slide.company}</p>}
               <h2 className="text-3xl md:text-4xl font-bold text-slate-900 mb-4">{slide.headline}</h2>
               <p className="text-lg text-slate-600 leading-relaxed mb-4">{slide.summary}</p>
-              {slide.sourceUrl && (
+              {isBrokenUrl ? (
+                <button
+                  onClick={handleBrokenLinkClick}
+                  className="inline-flex items-center text-sm text-amber-600 hover:text-amber-800 transition-colors"
+                >
+                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                  Search for Article
+                  {slide.sourceTitle && <span className="ml-1 text-slate-500">({slide.sourceTitle})</span>}
+                </button>
+              ) : slide.sourceUrl && (
                 <a
                   href={slide.sourceUrl}
                   target="_blank"

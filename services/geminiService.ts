@@ -687,6 +687,109 @@ const findImageForArticle = async (slide: { imageUrl?: string; headline: string;
 };
 
 
+/**
+ * Checks if a URL is a broken grounding redirect URL
+ */
+const isBrokenGroundingUrl = (url: string): boolean => {
+    return url.includes('vertexaisearch') || url.includes('grounding-api-redirect');
+};
+
+/**
+ * Fixes broken grounding URLs in presentation slides by matching them to source articles
+ */
+const fixPresentationUrls = (presentation: Presentation, newsData: NewsData): Presentation => {
+    // Collect all articles from newsData for matching
+    const allArticles: NewsArticle[] = [
+        ...newsData.internationalNews,
+        ...newsData.generalNews,
+        ...newsData.companyNews.flatMap(section => section.articles)
+    ];
+
+    console.log('\n============================================================');
+    console.log('Fixing broken URLs in presentation slides...');
+    console.log('============================================================\n');
+
+    let fixedCount = 0;
+    let brokenCount = 0;
+
+    const fixedSlides = presentation.slides.map(slide => {
+        if (slide.type !== 'news' || !slide.sourceUrl) {
+            return slide;
+        }
+
+        // Check if the URL is a broken grounding redirect
+        if (!isBrokenGroundingUrl(slide.sourceUrl)) {
+            return slide;
+        }
+
+        brokenCount++;
+        console.log(`🔍 Fixing broken URL for slide: "${slide.headline.substring(0, 50)}..."`);
+        console.log(`   Broken URL: ${slide.sourceUrl.substring(0, 80)}...`);
+
+        // Normalize slide headline for matching
+        const slideHeadlineNormalized = normalizeTitle(slide.headline);
+
+        // Find matching article by title similarity
+        const matchedArticle = allArticles.find(article => {
+            const articleTitleNormalized = normalizeTitle(article.title);
+
+            // Check exact match
+            if (slideHeadlineNormalized === articleTitleNormalized) {
+                return true;
+            }
+
+            // Check if one contains the other (for headline variations)
+            const longer = slideHeadlineNormalized.length > articleTitleNormalized.length
+                ? slideHeadlineNormalized : articleTitleNormalized;
+            const shorter = slideHeadlineNormalized.length > articleTitleNormalized.length
+                ? articleTitleNormalized : slideHeadlineNormalized;
+
+            if (shorter.length > 15 && longer.includes(shorter)) {
+                return true;
+            }
+
+            // Check word overlap (>70% common words)
+            const slideWords = new Set(slideHeadlineNormalized.split(' '));
+            const articleWords = articleTitleNormalized.split(' ');
+            const commonWords = articleWords.filter(word => slideWords.has(word)).length;
+            const overlapRatio = commonWords / Math.max(slideWords.size, articleWords.length);
+
+            return overlapRatio > 0.7;
+        });
+
+        if (matchedArticle) {
+            // Check if the matched article has a valid (non-broken) URL
+            if (!isBrokenGroundingUrl(matchedArticle.source.uri)) {
+                console.log(`   ✅ Fixed with source URL: ${matchedArticle.source.uri}`);
+                console.log(`   Matched article: "${matchedArticle.title.substring(0, 50)}..."`);
+                fixedCount++;
+                return {
+                    ...slide,
+                    sourceUrl: matchedArticle.source.uri,
+                    sourceTitle: matchedArticle.source.title || slide.sourceTitle
+                };
+            } else {
+                console.log(`   ⚠️  Matched article also has broken URL, marking as broken`);
+            }
+        } else {
+            console.log(`   ❌ No matching article found in source data`);
+        }
+
+        // Mark as broken if we couldn't fix it
+        return {
+            ...slide,
+            _urlBroken: true
+        };
+    });
+
+    console.log(`\n📊 Presentation URL Fix Summary:`);
+    console.log(`   Broken URLs found: ${brokenCount}`);
+    console.log(`   URLs fixed: ${fixedCount}`);
+    console.log(`   URLs still broken: ${brokenCount - fixedCount}\n`);
+
+    return { ...presentation, slides: fixedSlides };
+};
+
 export const generatePresentationFromNews = async (newsData: NewsData, dateRange: string): Promise<Presentation> => {
     const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
@@ -731,11 +834,14 @@ export const generatePresentationFromNews = async (newsData: NewsData, dateRange
         }
 
         const jsonString = responseText.substring(startIndex, endIndex + 1);
-        const presentationStructure: Presentation = JSON.parse(jsonString);
+        let presentationStructure: Presentation = JSON.parse(jsonString);
 
         if (!presentationStructure || !Array.isArray(presentationStructure.slides)) {
              throw new Error("API response for presentation is not in the expected format.");
         }
+
+        // Fix broken grounding URLs in presentation slides by matching to source data
+        presentationStructure = fixPresentationUrls(presentationStructure, newsData);
 
         // Find images for all news slides sequentially to avoid rate limiting
         const slidesWithImages: Slide[] = [];

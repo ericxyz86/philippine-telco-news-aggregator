@@ -39,6 +39,7 @@ export type Slide =
       imageUrl?: string;
       sourceUrl?: string;
       sourceTitle?: string;
+      _urlBroken?: boolean; // Flag set when URL validation fails
     }
   | {
       type: 'significance';
