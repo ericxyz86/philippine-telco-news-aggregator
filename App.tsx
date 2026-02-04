@@ -7,8 +7,11 @@ import LoadingSpinner from './components/LoadingSpinner';
 import PresentationViewer from './components/PresentationViewer';
 import BuzzSumoSection from './components/BuzzSumoSection';
 
-// Get backend API URL from environment or default to localhost
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:10000';
+// Get backend API URL from environment, or auto-detect based on hostname
+const API_URL = import.meta.env.VITE_API_URL ||
+  (window.location.hostname === 'telco-news.aiailabs.net'
+    ? 'https://telco-news-api.aiailabs.net'
+    : 'http://localhost:10000');
 
 
 const getFormattedDate = (date: Date): string => {
