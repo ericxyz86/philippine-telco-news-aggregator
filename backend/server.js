@@ -808,6 +808,82 @@ ${JSON.stringify(newsData, null, 2)}
 }
 `;
 
+// ==================== IMAGE SEARCH ====================
+
+const searchPexelsImage = async (searchQuery) => {
+  const apiKey = process.env.PEXELS_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const query = encodeURIComponent(searchQuery);
+    const url = `https://api.pexels.com/v1/search?query=${query}&per_page=3&orientation=landscape`;
+    const response = await fetch(url, {
+      headers: { 'Authorization': apiKey }
+    });
+
+    if (!response.ok) return null;
+    const data = await response.json();
+
+    if (data.photos && data.photos.length > 0) {
+      return data.photos[0].src.original || data.photos[0].src.large2x || data.photos[0].src.large;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const findImageForSlide = async (slide) => {
+  if (!slide.imageDescription && !slide.headline) return null;
+
+  let searchQuery = '';
+  if (slide.imageDescription) {
+    const hasPeople = /people|person|man|woman|executive|worker|employee|staff|professional|team|business people|Filipino|Asian/i.test(slide.imageDescription);
+    if (hasPeople) {
+      const hasFilipinoAsian = /Filipino|Asian/i.test(slide.imageDescription);
+      if (hasFilipinoAsian) {
+        searchQuery = `${slide.imageDescription} Philippines`;
+      } else {
+        searchQuery = 'technology telecommunications modern abstract Philippines';
+      }
+    } else {
+      searchQuery = `${slide.imageDescription} Philippines technology`;
+    }
+  } else {
+    const searchTerms = slide.headline
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '')
+      .split(' ')
+      .filter(word => word.length > 4 && !['about', 'their', 'which', 'where', 'these'].includes(word))
+      .slice(0, 3)
+      .join(' ');
+    searchQuery = `${searchTerms} technology abstract Philippines`;
+  }
+
+  const imageUrl = await searchPexelsImage(searchQuery);
+  if (imageUrl) {
+    console.log(`   🖼️  Found image for: "${slide.headline?.substring(0, 40)}..."`);
+  }
+  return imageUrl;
+};
+
+const addImagesToPresentation = async (presentation) => {
+  if (!presentation.slides) return presentation;
+
+  console.log(`\n🖼️  Searching for images for ${presentation.slides.filter(s => s.type === 'news').length} slides...`);
+
+  for (const slide of presentation.slides) {
+    if (slide.type === 'news' && !slide.imageUrl) {
+      const imageUrl = await findImageForSlide(slide);
+      if (imageUrl) {
+        slide.imageUrl = imageUrl;
+      }
+    }
+  }
+
+  return presentation;
+};
+
 // ==================== API ENDPOINTS ====================
 
 // Endpoint to fetch news from both BuzzSumo and Gemini
@@ -925,7 +1001,10 @@ app.post('/api/presentation', async (req, res) => {
     const startIndex = responseText.indexOf('{');
     const endIndex = responseText.lastIndexOf('}');
     const jsonString = responseText.substring(startIndex, endIndex + 1);
-    const presentation = JSON.parse(jsonString);
+    let presentation = JSON.parse(jsonString);
+
+    // Search for images for slides that don't have one
+    presentation = await addImagesToPresentation(presentation);
 
     res.json(presentation);
   } catch (error) {
