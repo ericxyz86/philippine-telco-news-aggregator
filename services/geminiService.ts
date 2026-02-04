@@ -790,51 +790,30 @@ const fixPresentationUrls = (presentation: Presentation, newsData: NewsData): Pr
     return { ...presentation, slides: fixedSlides };
 };
 
-export const generatePresentationFromNews = async (newsData: NewsData, dateRange: string): Promise<Presentation> => {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error("VITE_GEMINI_API_KEY environment variable not set. Please set it in your .env.local file.");
+// Get backend API URL, matching the logic in App.tsx
+const getApiUrl = () => {
+    if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+    if (typeof window !== 'undefined' && window.location.hostname === 'telco-news.aiailabs.net') {
+        return 'https://telco-news-api.aiailabs.net';
     }
+    return 'http://localhost:10000';
+};
 
-    const ai = new GoogleGenAI({ apiKey });
-    const prompt = createPresentationPrompt(newsData, dateRange);
-    let responseText = '';
-
+export const generatePresentationFromNews = async (newsData: NewsData, dateRange: string): Promise<Presentation> => {
     try {
-        console.log('Generating presentation from Gemini API...');
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                temperature: 0.3,
-            },
+        console.log('Generating presentation via backend API...');
+        const response = await fetch(`${getApiUrl()}/api/presentation`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ newsData, dateRange }),
         });
 
-        console.log('Presentation response received:', {
-            hasText: !!response.text,
-            hasCandidates: !!response.candidates,
-            candidatesLength: response.candidates?.length,
-            finishReason: response.candidates?.[0]?.finishReason
-        });
-
-        responseText = response.text;
-        if (!responseText) {
-            const finishReason = response.candidates?.[0]?.finishReason;
-            if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
-                throw new Error(`Presentation generation blocked due to: ${finishReason}. Please try again.`);
-            }
-            throw new Error("Received an empty response from the API while generating presentation. Please try again in a moment.");
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+            throw new Error(errorData.error || `Failed to generate presentation: ${response.status}`);
         }
 
-        const startIndex = responseText.indexOf('{');
-        const endIndex = responseText.lastIndexOf('}');
-
-        if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-            throw new Error(`Could not find a valid JSON object in the AI's presentation response. Response text: "${responseText}"`);
-        }
-
-        const jsonString = responseText.substring(startIndex, endIndex + 1);
-        let presentationStructure: Presentation = JSON.parse(jsonString);
+        let presentationStructure: Presentation = await response.json();
 
         if (!presentationStructure || !Array.isArray(presentationStructure.slides)) {
              throw new Error("API response for presentation is not in the expected format.");
@@ -847,7 +826,6 @@ export const generatePresentationFromNews = async (newsData: NewsData, dateRange
         const slidesWithImages: Slide[] = [];
         for (const slide of presentationStructure.slides) {
             if (slide.type === 'news') {
-                // Check if slide already has imageUrl or search for one
                 const imageUrl = await findImageForArticle(slide);
                 slidesWithImages.push({ ...slide, imageUrl: imageUrl || slide.imageUrl || undefined });
             } else {
@@ -858,10 +836,7 @@ export const generatePresentationFromNews = async (newsData: NewsData, dateRange
         return { ...presentationStructure, slides: slidesWithImages };
 
     } catch (error) {
-        console.error("Error fetching or parsing presentation data:", error);
-        if (error instanceof SyntaxError) {
-             throw new Error(`Failed to parse the presentation response from the AI. The format was invalid. Parser error: ${error.message}. Received text: "${responseText}"`);
-        }
-        throw new Error(`An error occurred while generating the presentation: ${error.message}`);
+        console.error("Error generating presentation:", error);
+        throw new Error(`An error occurred while generating the presentation: ${(error as Error).message}`);
     }
 };

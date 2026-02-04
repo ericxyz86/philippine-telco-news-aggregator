@@ -684,6 +684,130 @@ const fixAndValidateArticleUrls = async (parsedData, groundingChunks, buzzsumoAr
   return parsedData;
 };
 
+// ==================== PRESENTATION PROMPT ====================
+
+const createPresentationPrompt = (newsData, dateRange) => `
+You are a corporate communications expert and presentation designer for a major telecommunications company. Your task is to transform the provided JSON news data into a compelling and professional slide deck presentation. The presentation is for an internal executive briefing.
+
+**Input News Data:**
+${JSON.stringify(newsData, null, 2)}
+
+**Instructions:**
+1.  **Analyze the Data:** Carefully review all the news articles provided in the JSON.
+2.  **IMPORTANT - Include ALL Articles:** You MUST create a slide for EVERY article in the data. Do NOT skip or filter out any articles. This includes:
+    - Articles with \`isBuzzSumoTrending: true\` - these are high-engagement trending articles from social media and MUST be included
+    - All articles from \`generalNews\`, \`internationalNews\`, and \`companyNews\`
+3.  **Structure the Presentation:** Create a sequence of slides based on the following structure.
+4.  **Be Concise:** Headlines and summaries should be clear, direct, and impactful for a busy executive audience.
+5.  **Strategic Focus:** The "Significance" slide is the most important. Synthesize all the news to provide actionable insights.
+6.  **Image Handling:**
+    - Some articles may already have a \`thumbnailUrl\` field with an existing image URL.
+    - For slides based on articles WITH a \`thumbnailUrl\`, include it in the slide's \`imageUrl\` field and still provide an \`imageDescription\`.
+    - For slides without a \`thumbnailUrl\`, only provide an \`imageDescription\` (the image will be sourced later).
+    - **CRITICAL**: Image descriptions should be detailed, specific, and visually interesting for stock photo search.
+    - **PREFERRED APPROACH**: Use images WITHOUT people or faces to avoid racial representation issues. Examples:
+      * "Sleek fiber optic cables glowing with blue light against dark background"
+      * "Modern 5G cell tower against Manila skyline at sunset"
+      * "Abstract digital network connections with Philippine map overlay"
+      * "Smartphone showing fast internet speed test with glowing screen"
+      * "Futuristic server room with blue lighting and cable management"
+    - **ONLY IF PEOPLE ARE NECESSARY**: Specify "Filipino" or "Asian" people explicitly. Examples:
+      * "Filipino business executives in modern suits shaking hands in a bright corporate office"
+      * "Asian woman working on laptop in modern office with technology background"
+      * "Filipino tech workers collaborating around a conference table with network diagrams"
+    - **IMPORTANT**: Prefer technology, infrastructure, objects, and abstract concepts over images with people whenever possible.
+7.  **Output Format:** Your entire response MUST be a single, valid JSON object conforming to the specified structure. Do not include any introductory text, comments, or markdown. Ensure there are no trailing commas.
+
+**Presentation Structure:**
+
+1.  **Slide 1: Title Slide**
+    *   Type: \`title\`
+    *   Title: "Top Industry News"
+    *   Subtitle: The date range: "${dateRange}"
+
+2.  **PLDT News Slides**
+    *   Identify the news for "PLDT" from the \`companyNews\` array.
+    *   For each PLDT article, create one \`news\` slide.
+    *   \`company\`: "PLDT"
+    *   \`headline\`: A concise, powerful headline summarizing the article's core message.
+    *   \`summary\`: A brief paragraph explaining the news.
+    *   \`imageDescription\`: A short description for a relevant, professional stock photo WITHOUT ANY TEXT.
+    *   \`sourceUrl\`: The exact URL from the article's \`source.uri\` field.
+    *   \`sourceTitle\`: The source website name from the article's \`source.title\` field.
+
+3.  **Philippines Market & Global Industry News Slides (INCLUDING BUZZSUMO TRENDING)**
+    *   Identify articles from \`generalNews\` (Philippines market news) and \`internationalNews\` (global industry news).
+    *   **CRITICAL**: The \`generalNews\` array contains BOTH Google News articles AND BuzzSumo trending articles (marked with \`isBuzzSumoTrending: true\`).
+    *   **You MUST include ALL articles from generalNews**, including BuzzSumo trending articles. These trending articles have high social engagement and are important.
+    *   For articles with \`isBuzzSumoTrending: true\`, add "Trending" at the start of the headline to indicate high engagement.
+    *   These should appear UNDER "Top Industry News" section, NOT in the competitor section.
+    *   For each article, create one \`news\` slide.
+    *   \`company\`: Leave undefined or set to "Philippines Market" for generalNews, "Global Industry" for internationalNews.
+    *   \`headline\`: A concise, powerful headline summarizing the article's core message. Prefix with "Trending: " if \`isBuzzSumoTrending: true\`.
+    *   \`summary\`: A brief paragraph explaining the news.
+    *   \`imageDescription\`: A short description for a relevant, professional stock photo WITHOUT ANY TEXT.
+    *   \`sourceUrl\`: The exact URL from the article's \`source.uri\` field.
+    *   \`sourceTitle\`: The source website name from the article's \`source.title\` field.
+
+4.  **Slide N: Competitor Title Slide**
+    *   Type: \`title\`
+    *   Title: "Top Competitor News"
+    *   Subtitle: The date range: "${dateRange}"
+
+5.  **Competitor News Slides**
+    *   Identify news for "Globe Telecom", "Converge ICT", and "DITO Telecommunity" ONLY.
+    *   DO NOT include generalNews or internationalNews here - they belong in the Industry section above.
+    *   For each competitor article, create one \`news\` slide with the same structure as the PLDT slides (\`company\`, \`headline\`, \`summary\`, \`imageDescription\`, \`sourceUrl\`, \`sourceTitle\`).
+
+6.  **Slide X: Significance Slide**
+    *   Type: \`significance\`
+    *   Title: "Significance to Our Business"
+    *   Analyze ALL the provided news items collectively, including trending BuzzSumo articles.
+    *   Generate an array of 5 insightful bullet points in the \`points\` field, explaining the strategic implications. These points should cover:
+        *   Market reach and competitive positioning.
+        *   Financial implications or opportunities.
+        *   Regulatory and market protection efforts.
+        *   Pressure for innovation and infrastructure development.
+        *   New opportunities or potential threats.
+
+7.  **Final Slide: End Slide**
+    *   Type: \`end\`
+    *   Title: "End of Report"
+
+**JSON Output Structure (must be exact):**
+{
+  "slides": [
+    {
+      "type": "title",
+      "title": "...",
+      "subtitle": "..."
+    },
+    {
+      "type": "news",
+      "company": "PLDT",
+      "headline": "...",
+      "summary": "...",
+      "imageDescription": "...",
+      "imageUrl": "...",
+      "sourceUrl": "...",
+      "sourceTitle": "..."
+    },
+    {
+      "type": "significance",
+      "title": "Significance to Our Business",
+      "points": [
+        "...",
+        "..."
+      ]
+    },
+    {
+      "type": "end",
+      "title": "End of Report"
+    }
+  ]
+}
+`;
+
 // ==================== API ENDPOINTS ====================
 
 // Endpoint to fetch news from both BuzzSumo and Gemini
@@ -783,17 +907,9 @@ app.post('/api/presentation', async (req, res) => {
 
     console.log('Generating presentation...');
 
-    // Note: The presentation generation and image search logic
-    // is complex and calls client-side APIs (Pexels, Unsplash).
-    // For now, we'll keep that on the frontend and only move
-    // the Gemini API call to the backend.
-
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-    const prompt = `You are a corporate communications expert...
-[Full prompt would go here - truncated for brevity]
-${JSON.stringify(newsData, null, 2)}
-Date Range: ${dateRange}`;
+    const prompt = createPresentationPrompt(newsData, dateRange);
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
