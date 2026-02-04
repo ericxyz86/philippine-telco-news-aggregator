@@ -53,6 +53,11 @@ const resolveUrl = async (url, maxRedirects = 5) => {
         }
 
         // Non-redirect, non-success response
+        // Treat 403 as "valid" if we successfully followed redirects to a real URL
+        // Many news sites block HEAD requests from bots but the URL is still valid
+        if (response.status === 403 && redirectCount > 0) {
+          return { url: currentUrl, valid: true, status: response.status };
+        }
         return { url: currentUrl, valid: false, status: response.status };
       } catch (fetchError) {
         clearTimeout(timeout);
@@ -100,7 +105,9 @@ const validateUrl = async (url) => {
     });
 
     clearTimeout(timeout);
-    return response.ok;
+    // Accept 403 as valid - many news sites block HEAD requests from bots
+    // but the URL is still valid for end users clicking on it
+    return response.ok || response.status === 403;
   } catch {
     return false;
   }
