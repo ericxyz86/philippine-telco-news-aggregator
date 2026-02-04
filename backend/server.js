@@ -867,16 +867,47 @@ const findImageForSlide = async (slide) => {
   return imageUrl;
 };
 
+const isValidImageUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  if (url.includes('vertexaisearch') || url.includes('grounding-api-redirect')) return false;
+  if (!url.startsWith('http')) return false;
+  return true;
+};
+
 const addImagesToPresentation = async (presentation) => {
   if (!presentation.slides) return presentation;
 
-  console.log(`\n🖼️  Searching for images for ${presentation.slides.filter(s => s.type === 'news').length} slides...`);
+  const newsSlides = presentation.slides.filter(s => s.type === 'news');
+  console.log(`\n🖼️  Processing images for ${newsSlides.length} slides...`);
 
   for (const slide of presentation.slides) {
-    if (slide.type === 'news' && !slide.imageUrl) {
-      const imageUrl = await findImageForSlide(slide);
-      if (imageUrl) {
-        slide.imageUrl = imageUrl;
+    if (slide.type !== 'news') continue;
+
+    // Skip if slide already has a valid image URL (e.g., from BuzzSumo thumbnail)
+    if (isValidImageUrl(slide.imageUrl)) {
+      console.log(`   ✅ Existing image for: "${slide.headline?.substring(0, 40)}..."`);
+      continue;
+    }
+
+    // Clear any invalid imageUrl
+    delete slide.imageUrl;
+
+    // Search for an image
+    const imageUrl = await findImageForSlide(slide);
+    if (imageUrl) {
+      slide.imageUrl = imageUrl;
+    } else {
+      // Fallback: try a generic search based on the company or topic
+      const fallbackQuery = slide.company
+        ? `${slide.company} telecommunications Philippines`
+        : 'telecommunications technology Philippines';
+      console.log(`   🔄 Fallback search for: "${slide.headline?.substring(0, 40)}..."`);
+      const fallbackUrl = await searchPexelsImage(fallbackQuery);
+      if (fallbackUrl) {
+        slide.imageUrl = fallbackUrl;
+        console.log(`   🖼️  Fallback image found`);
+      } else {
+        console.log(`   ❌ No image found for: "${slide.headline?.substring(0, 40)}..."`);
       }
     }
   }
